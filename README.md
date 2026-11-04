@@ -93,14 +93,43 @@ und `instance`. Bei Feldvalidierungsfehlern enthält `errors` zusätzlich Feldna
 und Meldungen. Auch unlesbares JSON, ungültige Datumswerte und ungültige IDs im Pfad
 liefern HTTP 400.
 
-## Architektur und Grenzen
+## PostgreSQL und Architektur
 
-Das Paket `expense` enthält Controller, Request-/Response-Records und ein konkretes
-In-Memory-Repository. Bean Validation prüft Eingaben. Das zentrale Controller Advice
-im Paket `error` verwendet Spring Problem Details. Eine zusätzliche Service-Schicht
-ist für die aktuelle CRUD-Logik nicht nötig.
+OrbStack muss laufen. Lokale Datenbank starten:
 
-Das Repository synchronisiert Zugriffe und liefert unveränderliche Datensätze und
-Listenkopien zurück. Daten und ID-Zähler gelten nur für diesen Anwendungsprozess und
-gehen beim Neustart verloren. PostgreSQL, Authentifizierung, Filter und Pagination
-sind noch nicht enthalten.
+```sh
+docker compose up -d --wait
+./gradlew bootRun
+```
+
+PostgreSQL 17.11 speichert Daten im benannten Volume `postgres_data`.
+`docker compose down` behält Daten; `docker compose down -v` löscht sie.
+Lokale Zugangsdaten: Datenbank, Benutzer und Passwort jeweils `expensetracker`.
+Die Entwicklungswerte sind nicht für einen öffentlichen Betrieb gedacht.
+`DB_USERNAME`, `DB_PASSWORD` und `DB_URL` überschreiben die Anwendungskonfiguration.
+Compose unterstützt `DB_PORT` (Standard 5432); bei Änderung auch `DB_URL` anpassen.
+
+Der Controller verwendet weiterhin den Repository-Adapter. Dieser bildet zwischen
+API-Records und einer getrennten JPA-Entity ab und verwaltet Schreibtransaktionen.
+Spring Data JPA übernimmt Datenzugriffe. Liquibase erstellt das Schema; Hibernate
+validiert es nur. NUMERIC bewahrt Dezimalpräzision ohne feste Nachkommastellenskala.
+Es gibt keine Flyway-Abhängigkeit oder zusätzliche Service-Schicht.
+
+`./gradlew test` startet PostgreSQL automatisch mit Testcontainers und führt auch
+Liquibase aus. Keine manuell gestartete Datenbank ist nötig. OrbStack und beim ersten
+Lauf Netzwerkzugriff für Images und Abhängigkeiten sind erforderlich. Ohne Docker
+schlagen die Tests fehl. Die Testdatenbank verwendet nicht das Compose-Volume.
+
+## Manueller Persistenztest über Anwendungsneustart
+
+1. `docker compose up -d --wait` und `./gradlew bootRun` ausführen.
+2. In einem zweiten Terminal die POST-Anfrage oben ausführen; ID und Antwort notieren.
+3. Anwendung mit Ctrl+C beenden. PostgreSQL und Volume unverändert lassen.
+4. Anwendung erneut mit `./gradlew bootRun` starten.
+5. `curl -i http://localhost:8080/api/expenses/ID` mit der notierten ID ausführen:
+   Erwartet sind HTTP 200 und identische ID, Beschreibung, Betrag und Datum.
+6. Eine weitere Ausgabe erstellen: Sie muss eine neue ID erhalten. Optional Compose
+   mit `docker compose down` und `docker compose up -d --wait` neu erstellen und GET
+   wiederholen; das Volume bewahrt die Daten. Nicht `down -v` verwenden.
+
+Authentifizierung, Filter und Pagination sind weiterhin nicht enthalten.

@@ -1,46 +1,48 @@
 package de.example.expensetracker.expense;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
-import java.util.TreeMap;
-
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 @Repository
+@Transactional(readOnly = true)
 public class ExpenseRepository {
+    private final ExpenseJpaRepository jpa;
 
-    private final Map<Long, Expense> expenses = new TreeMap<>();
-    private long nextId = 1;
-
-    public synchronized Expense create(ExpenseRequest request) {
-        Expense expense = fromRequest(nextId++, request);
-        expenses.put(expense.id(), expense);
-        return expense;
+    public ExpenseRepository(ExpenseJpaRepository jpa) {
+        this.jpa = jpa;
     }
 
-    public synchronized List<Expense> findAll() {
-        return List.copyOf(expenses.values());
+    @Transactional
+    public Expense create(ExpenseRequest request) {
+        ExpenseEntity entity = new ExpenseEntity();
+        entity.update(request);
+        return jpa.save(entity).response();
     }
 
-    public synchronized Optional<Expense> findById(long id) {
-        return Optional.ofNullable(expenses.get(id));
+    public List<Expense> findAll() {
+        return jpa.findAll(Sort.by("id")).stream().map(ExpenseEntity::response).toList();
     }
 
-    public synchronized Optional<Expense> update(long id, ExpenseRequest request) {
-        if (!expenses.containsKey(id)) {
-            return Optional.empty();
-        }
-        Expense expense = fromRequest(id, request);
-        expenses.put(id, expense);
-        return Optional.of(expense);
+    public Optional<Expense> findById(long id) {
+        return jpa.findById(id).map(ExpenseEntity::response);
     }
 
-    public synchronized boolean delete(long id) {
-        return expenses.remove(id) != null;
+    @Transactional
+    public Optional<Expense> update(long id, ExpenseRequest request) {
+        return jpa.findById(id).map(entity -> {
+            entity.update(request);
+            return entity.response();
+        });
     }
 
-    private Expense fromRequest(long id, ExpenseRequest request) {
-        return new Expense(id, request.description(), request.amount(), request.date());
+    @Transactional
+    public boolean delete(long id) {
+        return jpa.findById(id).map(entity -> {
+            jpa.delete(entity);
+            return true;
+        }).orElse(false);
     }
 }

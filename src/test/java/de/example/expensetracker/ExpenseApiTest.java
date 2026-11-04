@@ -18,9 +18,18 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+@org.springframework.context.annotation.Import(PostgresTestConfiguration.class)
 @SpringBootTest
 @AutoConfigureMockMvc
 class ExpenseApiTest {
+
+    @Autowired
+    private org.springframework.jdbc.core.JdbcTemplate jdbc;
+
+    @org.junit.jupiter.api.BeforeEach
+    void cleanDatabase() {
+        jdbc.update("DELETE FROM expenses");
+    }
 
     private static final String VALID = """
             {"description":"Lunch","amount":12.34,"date":"2026-11-03"}
@@ -79,6 +88,10 @@ class ExpenseApiTest {
         long secondId = mapper.readTree(second).get("id").asLong();
         assertThat(firstId).isPositive().isNotEqualTo(999999).isNotEqualTo(secondId);
         assertThat(first).contains("123456789.123456789");
+        mvc.perform(get("/api/expenses"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(firstId))
+                .andExpect(jsonPath("$[1].id").value(secondId));
         mvc.perform(delete("/api/expenses/{id}", firstId)).andExpect(status().isNoContent());
         mvc.perform(delete("/api/expenses/{id}", secondId)).andExpect(status().isNoContent());
     }
@@ -91,6 +104,7 @@ class ExpenseApiTest {
         expectProblem(put(path).contentType(MediaType.APPLICATION_JSON).content(VALID), 404);
         expectProblem(delete(path), 404);
         expectProblem(get(path), 404);
+        mvc.perform(get("/api/expenses")).andExpect(content().json("[]", JsonCompareMode.STRICT));
     }
 
     @ParameterizedTest
