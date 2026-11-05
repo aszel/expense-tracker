@@ -99,6 +99,22 @@ curl -i -X POST http://localhost:8080/api/expenses \
 Die Beispiel-ID `1` gegebenenfalls durch die ID aus der POST-Antwort ersetzen.
 PUT erstellt keine fehlenden Ausgaben. Die Liste ist nach ID aufsteigend sortiert.
 
+GET `/api/expenses` unterstützt die optionalen Query-Parameter `from` und `to`
+im Format `YYYY-MM-DD`. Beide Grenzen beziehen sich auf das Ausgabedatum und sind
+inklusive. Jeder Parameter kann einzeln angegeben werden; ohne Parameter werden
+weiterhin alle Ausgaben geliefert. Auch gefilterte Listen sind nach ID aufsteigend
+sortiert. Ohne Treffer lautet die Antwort `[]` mit HTTP 200. Liegt `from` nach `to`
+oder ist ein Datum ungültig, folgt HTTP 400 mit Problem Details.
+
+```sh
+# Geschlossenes Datumsintervall
+curl -i 'http://localhost:8080/api/expenses?from=2026-11-01&to=2026-11-30'
+
+# Nur Untergrenze bzw. nur Obergrenze
+curl -i 'http://localhost:8080/api/expenses?from=2026-11-03'
+curl -i 'http://localhost:8080/api/expenses?to=2026-11-03'
+```
+
 PUT und DELETE laden die Ausgabe innerhalb ihrer Schreibtransaktion mit einer
 pessimistischen Schreibsperre (`PESSIMISTIC_WRITE`). Konkurrierende Schreibzugriffe
 auf dieselbe Ausgabe warten bis zum Ende der sperrenden Transaktion. Wird die
@@ -153,4 +169,4 @@ schlagen die Tests fehl. Die Testdatenbank verwendet nicht das Compose-Volume.
    mit `docker compose down` und `docker compose up -d --wait` neu erstellen und GET
    wiederholen; das Volume bewahrt die Daten. Nicht `down -v` verwenden.
 
-Authentifizierung, Filter und Pagination sind weiterhin nicht enthalten.
+Authentifizierung und Pagination sind weiterhin nicht enthalten.

@@ -1,5 +1,6 @@
 package de.example.expensetracker.expense;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.Sort;
@@ -22,8 +23,18 @@ public class ExpenseRepository {
         return jpa.save(entity).response();
     }
 
-    public List<Expense> findAll() {
-        return jpa.findAll(Sort.by("id")).stream().map(ExpenseEntity::response).toList();
+    public List<Expense> findAll(LocalDate from, LocalDate to) {
+        List<ExpenseEntity> entities;
+        if (from != null && to != null) {
+            entities = jpa.findByDateBetweenOrderByIdAsc(from, to);
+        } else if (from != null) {
+            entities = jpa.findByDateGreaterThanEqualOrderByIdAsc(from);
+        } else if (to != null) {
+            entities = jpa.findByDateLessThanEqualOrderByIdAsc(to);
+        } else {
+            entities = jpa.findAll(Sort.by("id"));
+        }
+        return entities.stream().map(ExpenseEntity::response).toList();
     }
 
     public Optional<Expense> findById(long id) {

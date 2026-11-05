@@ -3,6 +3,7 @@ package de.example.expensetracker;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -101,6 +102,53 @@ class ExpenseApiTest {
                 .andExpect(jsonPath("$[1].id").value(secondId));
         mvc.perform(delete("/api/expenses/{id}", firstId)).andExpect(status().isNoContent());
         mvc.perform(delete("/api/expenses/{id}", secondId)).andExpect(status().isNoContent());
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            ",,later|earlier|middle",
+            "2026-11-03,,later|middle",
+            ",2026-11-03,earlier|middle",
+            "2026-11-02,2026-11-03,earlier|middle",
+            "2026-11-03,2026-11-03,middle",
+            "2026-12-01,,",
+            ",2026-10-01,",
+            "2026-11-05,2026-11-06,"
+    })
+    void dateFiltersIncludeBoundariesAndKeepIdOrder(String from, String to, String expected) throws Exception {
+        String[] descriptions = {"later", "earlier", "middle"};
+        String[] dates = {"2026-11-04", "2026-11-02", "2026-11-03"};
+        for (int i = 0; i < dates.length; i++) {
+            mvc.perform(post("/api/expenses").contentType(MediaType.APPLICATION_JSON)
+                            .content(VALID.replace("Lunch", descriptions[i]).replace("2026-11-03", dates[i])))
+                    .andExpect(status().isCreated());
+        }
+        var request = get("/api/expenses");
+        if (from != null) {
+            request.param("from", from);
+        }
+        if (to != null) {
+            request.param("to", to);
+        }
+        String response = mvc.perform(request).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        var actual = mapper.readTree(response).findValuesAsText("description");
+        assertThat(actual).containsExactly(expected == null ? new String[0] : expected.split("\\|"));
+    }
+
+    @Test
+    void reversedDateRangeReturnsProblemDetails() throws Exception {
+        expectProblem(get("/api/expenses").param("from", "2026-11-04").param("to", "2026-11-03"), 400);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "from,not-a-date", "to,not-a-date",
+            "from,03.11.2026", "to,03.11.2026",
+            "from,2026-02-30", "to,2026-02-30"
+    })
+    void invalidDateFiltersReturnProblemDetails(String parameter, String value) throws Exception {
+        expectProblem(get("/api/expenses").param(parameter, value), 400);
     }
 
     @Test
