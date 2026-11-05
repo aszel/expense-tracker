@@ -32,7 +32,7 @@ public class ExpenseRepository {
 
     @Transactional
     public Optional<Expense> update(long id, ExpenseRequest request) {
-        return jpa.findById(id).map(entity -> {
+        return jpa.findByIdForUpdate(id).map(entity -> {
             entity.update(request);
             return entity.response();
         });
@@ -40,7 +40,7 @@ public class ExpenseRepository {
 
     @Transactional
     public boolean delete(long id) {
-        return jpa.findById(id).map(entity -> {
+        return jpa.findByIdForUpdate(id).map(entity -> {
             jpa.delete(entity);
             return true;
         }).orElse(false);

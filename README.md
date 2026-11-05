@@ -22,6 +22,17 @@ den CRUD-Ablauf, serverseitige IDs, Dezimalpräzision, Validierung und unbekannt
 sowie Problem Details für ungültige Eingaben.
 Testbericht: `build/reports/tests/test/index.html`.
 
+Der Integrationstest für konkurrierende Löschungen lässt sich gezielt ausführen:
+
+```sh
+./gradlew test --tests de.example.expensetracker.ExpenseApiTest.concurrentDeletionReturnsNotFoundForWaitingWrite
+```
+
+Er prüft PUT und DELETE gegen eine noch nicht bestätigte Löschung in einer zweiten
+Transaktion. Erst wenn PostgreSQL bestätigt, dass der Request auf diese Transaktion
+wartet, wird die Löschung bestätigt. Beide Requests müssen anschließend HTTP 404
+mit `application/problem+json` liefern; die Ausgabe bleibt gelöscht.
+
 ## Anwendung starten
 
 ```sh
@@ -87,6 +98,16 @@ curl -i -X POST http://localhost:8080/api/expenses \
 
 Die Beispiel-ID `1` gegebenenfalls durch die ID aus der POST-Antwort ersetzen.
 PUT erstellt keine fehlenden Ausgaben. Die Liste ist nach ID aufsteigend sortiert.
+
+PUT und DELETE laden die Ausgabe innerhalb ihrer Schreibtransaktion mit einer
+pessimistischen Schreibsperre (`PESSIMISTIC_WRITE`). Konkurrierende Schreibzugriffe
+auf dieselbe Ausgabe warten bis zum Ende der sperrenden Transaktion. Wird die
+Ausgabe während dieser Wartezeit durch die andere Transaktion gelöscht und die
+Löschung bestätigt, antwortet der wartende Request mit HTTP 404 und Problem Details.
+Er erhält dadurch keine unbehandelte Exception wegen einer zwischen Lesen und
+Schreiben verschwundenen Zeile. Erfolgreiche PUTs liefern weiterhin 200,
+erfolgreiche DELETEs 204. Eine Versionsprüfung für veraltete Clientdaten ist damit
+nicht verbunden.
 
 Fehler liefern `application/problem+json` mit `type`, `title`, `status`, `detail`
 und `instance`. Bei Feldvalidierungsfehlern enthält `errors` zusätzlich Feldnamen

@@ -13,6 +13,10 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import javax.sql.DataSource;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasItem;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -40,6 +44,9 @@ class ExpenseApiTest {
 
     @Autowired
     private ObjectMapper mapper;
+
+    @Autowired
+    private DataSource dataSource;
 
     @Test
     void completeCrudLifecycle() throws Exception {
@@ -108,6 +115,65 @@ class ExpenseApiTest {
     }
 
     @ParameterizedTest
+    @ValueSource(strings = {"PUT", "DELETE"})
+    void concurrentDeletionReturnsNotFoundForWaitingWrite(String method) throws Exception {
+        var created = mvc.perform(post("/api/expenses").contentType(MediaType.APPLICATION_JSON).content(VALID))
+                .andExpect(status().isCreated()).andReturn();
+        long id = mapper.readTree(created.getResponse().getContentAsString()).get("id").asLong();
+        String path = "/api/expenses/" + id;
+        var executor = Executors.newSingleThreadExecutor();
+
+        try (var connection = dataSource.getConnection()) {
+            connection.setAutoCommit(false);
+            try {
+                int blockerPid;
+                try (var statement = connection.createStatement();
+                     var result = statement.executeQuery("SELECT pg_backend_pid()")) {
+                    result.next();
+                    blockerPid = result.getInt(1);
+                }
+                try (var statement = connection.prepareStatement("DELETE FROM expenses WHERE id = ?")) {
+                    statement.setLong(1, id);
+                    assertThat(statement.executeUpdate()).isEqualTo(1);
+                }
+
+                var request = method.equals("PUT")
+                        ? put(path).contentType(MediaType.APPLICATION_JSON).content(VALID.replace("Lunch", "Dinner"))
+                        : delete(path);
+                var response = executor.submit(() -> expectProblem(request, 404).andReturn());
+
+                // Commit only once PostgreSQL confirms that the request is waiting on our deletion.
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+                boolean blocked = false;
+                while (System.nanoTime() < deadline) {
+                    blocked = Boolean.TRUE.equals(jdbc.queryForObject("""
+                            SELECT EXISTS (
+                                SELECT 1 FROM pg_stat_activity
+                                WHERE ? = ANY(pg_blocking_pids(pid))
+                            )
+                            """, Boolean.class, blockerPid));
+                    if (blocked || response.isDone()) {
+                        break;
+                    }
+                    Thread.sleep(20);
+                }
+                assertThat(blocked).as("%s must wait for the uncommitted deletion", method).isTrue();
+                connection.commit();
+
+                assertThat(response.get(10, TimeUnit.SECONDS).getResponse().getContentAsString())
+                        .contains("Expense " + id + " not found");
+                expectProblem(get(path), 404);
+                assertThat(jdbc.queryForObject("SELECT count(*) FROM expenses", Long.class)).isZero();
+            } finally {
+                connection.rollback();
+            }
+        } finally {
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = {
             "{}",
             "{\"description\":\" \",\"amount\":1,\"date\":\"2026-11-03\"}",
@@ -139,6 +205,16 @@ class ExpenseApiTest {
     void unreadableRequestsReturnProblemDetails(String body) throws Exception {
         expectProblem(post("/api/expenses").contentType(MediaType.APPLICATION_JSON).content(body), 400);
         expectProblem(put("/api/expenses/1").contentType(MediaType.APPLICATION_JSON).content(body), 400);
+    }
+
+    @Test
+    void descriptionContainingNullCharacterReturnsProblemDetailsOnCreate() throws Exception {
+        String body = """
+                {"description":"Lunch\\u0000break","amount":12.34,"date":"2026-11-03"}
+                """;
+        assertThat(mapper.readTree(body).get("description").asText()).contains("\0");
+
+        expectProblem(post("/api/expenses").contentType(MediaType.APPLICATION_JSON).content(body), 400);
     }
 
     @Test
