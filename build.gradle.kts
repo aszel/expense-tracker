@@ -35,3 +35,37 @@ dependencies {
 tasks.withType<Test> {
     useJUnitPlatform()
 }
+
+// Uses existing Node/pnpm installations; never downloads a toolchain.
+val frontendDirectory = layout.projectDirectory.dir("frontend")
+val pnpmExecutable = providers.gradleProperty("pnpmExecutable").orElse("pnpm")
+val frontendDev = providers.gradleProperty("frontendDev").map(String::toBoolean).orElse(false)
+
+val frontendInstall by tasks.registering(Exec::class) {
+    workingDir(frontendDirectory)
+    commandLine(pnpmExecutable.get(), "install", "--frozen-lockfile")
+    inputs.files("frontend/package.json", "frontend/pnpm-lock.yaml", "frontend/.npmrc", "frontend/.node-version")
+    outputs.dir("frontend/node_modules")
+}
+val frontendBuild by tasks.registering(Exec::class) {
+    dependsOn(frontendInstall)
+    workingDir(frontendDirectory)
+    commandLine(pnpmExecutable.get(), "run", "build")
+    inputs.files(fileTree("frontend/src"), "frontend/index.html", "frontend/tsconfig.json", "frontend/vite.config.ts", "frontend/package.json", "frontend/pnpm-lock.yaml")
+    outputs.dir("frontend/dist")
+}
+val frontendTest by tasks.registering(Exec::class) {
+    dependsOn(frontendInstall)
+    workingDir(frontendDirectory)
+    commandLine(pnpmExecutable.get(), "run", "test")
+}
+tasks.processResources {
+    if (!frontendDev.get()) {
+        dependsOn(frontendBuild)
+        from(frontendDirectory.dir("dist")) { into("static") }
+    }
+}
+tasks.named<org.springframework.boot.gradle.tasks.run.BootRun>("bootRun") {
+    if (frontendDev.get()) systemProperty("spring.profiles.active", "frontend-dev")
+}
+tasks.check { dependsOn(frontendTest) }

@@ -56,9 +56,22 @@ public class SecurityConfiguration {
                             problem(mapper, request, response, status,
                                     status == HttpStatus.UNAUTHORIZED ? "Login required" : "Access denied or invalid CSRF token");
                         }))
-                .oauth2Login(login -> login.loginPage("/login").defaultSuccessUrl("/api/me", true)
-                        .failureHandler((request, response, exception) ->
-                                problem(mapper, request, response, HttpStatus.UNAUTHORIZED, "OpenID Connect login failed")))
+                .oauth2Login(login -> login.loginPage("/login").defaultSuccessUrl("/", true)
+                        .failureHandler((request, response, exception) -> {
+                            if (request.getHeader("Accept") != null && request.getHeader("Accept").contains("text/html")) {
+                                response.setStatus(401);
+                                response.setContentType("text/html;charset=UTF-8");
+                                response.getWriter().write("""
+                                        <!doctype html><html lang="de"><meta charset="utf-8">
+                                        <meta name="viewport" content="width=device-width, initial-scale=1">
+                                        <title>Anmeldung fehlgeschlagen</title><body>
+                                        <h1>Anmeldung fehlgeschlagen</h1><p>Bitte starte die Anmeldung erneut.</p>
+                                        <a href="/login">Erneut anmelden</a></body></html>
+                                        """);
+                            } else {
+                                problem(mapper, request, response, HttpStatus.UNAUTHORIZED, "OpenID Connect login failed");
+                            }
+                        }))
                 .logout(config -> config.logoutSuccessHandler(logout));
         return http.build();
     }

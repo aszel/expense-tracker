@@ -11,7 +11,7 @@ Hier werden diese Abläufe und Regeln nicht als weitere Referenzlisten wiederhol
 
 ## 1. Schlanker Datenfluss mit getrennten API- und Persistenzmodellen
 
-**Kontext:** Die Anwendung verwaltet Ausgaben als REST-Ressourcen. Die aktuelle
+**Kontext:** Die Anwendung verwaltet Einnahmen und Ausgaben als REST-Ressourcen. Die aktuelle
 Fachlogik erfordert keine zusätzliche Orchestrierungsschicht.
 
 **Entscheidung:** Der Controller ruft einen Repository-Adapter auf, der API-Records
@@ -31,7 +31,7 @@ Service-Schicht braucht einen konkreten fachlichen Anlass.
 ## 2. Keycloak für Identitäten, OIDC-Client und lokale Session im Tracker
 
 **Kontext:** Nutzer sollen sich im Browser anmelden, Passwörter selbst verwalten
-und sich wieder abmelden können. Eine Ausgabenoberfläche ist bisher nicht vorhanden.
+und sich wieder abmelden können. Die React-Oberfläche nutzt diese Anmeldung und die serverseitige Session.
 
 **Entscheidung:** Keycloak übernimmt Nutzerkonten und Zugangsdaten. Der Tracker ist
 ein vertraulicher OIDC-Client mit Authorization Code Flow und genau einem
@@ -157,3 +157,52 @@ nicht als dauerhaft gültige Erfolgsaussage in diese Architekturaufzeichnung.
 **Nachweis:** [PostgresTestConfiguration](../src/test/java/de/example/expensetracker/PostgresTestConfiguration.java),
 [SecurityApiTest](../src/test/java/de/example/expensetracker/SecurityApiTest.java),
 [ExpenseMigrationTest](../src/test/java/de/example/expensetracker/ExpenseMigrationTest.java).
+
+
+## 6. React als statischer Client unter derselben Origin
+
+**Entscheidung:** React und TypeScript liegen unter `frontend/`; Vite erstellt die
+statischen Ressourcen, die Gradle in das Spring-Boot-JAR übernimmt. Node und pnpm
+sind ausschließlich Build-/Entwicklungswerkzeuge, kein zusätzlicher Laufzeitserver.
+Ihre Versionen stehen in `frontend/.node-version` und `frontend/package.json`;
+Abhängigkeiten sind exakt und über das pnpm-Lockfile festgehalten.
+
+**Begründung und Folgen:** API und Browsernavigation verwenden dieselbe Origin.
+Spring bleibt der einzige OIDC-Client, Tokenverwaltung im Browser entfällt.
+`/api/me`, `/api/csrf` und das POST-Logout-Formular bilden die Sessionintegration.
+Bei `401` wird der Query-Cache geleert; fehlgeschlagene Mutationen werden nicht
+automatisch wiederholt. Nach erfolgreichem Login führt Spring auf `/`.
+Browser-Callback-Fehler liefern eine HTML-Fehlerseite; API-orientierte Aufrufer
+bekommen weiterhin Problem Details. Nur explizite UI-Routen liefern das SPA-HTML;
+API-, Asset- und unbekannte Routen erhalten keinen pauschalen SPA-Fallback.
+
+Im lokalen Entwicklungsprofil lädt Spring das HTML und die Module vom Vite-Server;
+der Hot-Reload-WebSocket verwendet dessen Port direkt. Die Origin der Fach- und
+Authentifizierungsaufrufe bleibt unverändert. Das Profil ist keine Betriebsoption.
+Startanleitungen stehen ausschließlich in der README.
+
+**Grenzen:** Die Anwendung bleibt auf lokalen HTTP-Betrieb ausgelegt. Smartphones
+werden durch responsive Darstellung und Browser-Tests berücksichtigt; echter
+Zugriff aus dem Heimnetz und öffentlicher Betrieb sind nicht eingerichtet.
+
+## 7. Gemeinsame Buchungen bei kompatibler Ausgaben-API
+
+**Entscheidung:** Die bestehende Tabelle erhält mit einem neuen Changeset eine
+verpflichtende Buchungsart. Bestehende Zeilen sind `EXPENSE`. Ein gemeinsamer
+Repository-Adapter verwendet die bisherige Entity für beide APIs. Die neue
+`/api/bookings`-API verwaltet `INCOME` und `EXPENSE`; die bisherige API filtert bereits
+in ihren Datenbankabfragen zusätzlich nach `EXPENSE`, auch bei Schreibsperren.
+Besitzerfilter und unsichtbare besitzerlose Altdaten gelten für beide APIs.
+
+**Begründung und Folgen:** Eine zweite Einnahmentabelle würde CRUD, Besitzertrennung
+und Auswertungen verdoppeln. Positive Beträge plus explizite Art erhalten die
+bisherige Betragsvalidierung. Die alte API bleibt einschließlich ihrer numerischen
+JSON-Beträge kompatibel. Die neue API verwendet Dezimalstrings, damit JavaScript
+keine Präzision beim JSON-Parsen verliert. Dezimalarithmetik im Client ermittelt
+Summen ohne binäre Fließkommarechnung; Anzeige und Speicherung runden nicht auf
+zwei Stellen. EUR ist zunächst eine gemeinsame Darstellungsannahme.
+
+**Grenzen:** Die Übersicht lädt den vollständigen Zeitraum und summiert im Client.
+Pagination und serverseitige Aggregationen fehlen. Schreibsperren verhindern keine
+Überschreibung veralteter Formularstände. Ein Artenwechsel über die neue API kann
+eine Buchung für die alte Ausgaben-API sichtbar oder unsichtbar machen.

@@ -3,8 +3,9 @@
 REST-API mit Java 21, Spring Boot 3.5.16, Gradle 8.14.3 und PostgreSQL 17.11.
 Keycloak 26.8.2 übernimmt die Benutzerverwaltung. Anmeldung erfolgt im Browser über
 OpenID Connect; der Tracker verwendet eine serverseitige Session. Jeder Benutzer
-sieht und bearbeitet ausschließlich seine eigenen Ausgaben. Eine Ausgabenoberfläche
-ist nicht enthalten.
+sieht und bearbeitet ausschließlich seine eigenen Buchungen. Eine deutsche
+React-Oberfläche zeigt Einnahmen und Ausgaben in EUR und ermöglicht deren
+Erfassung, Bearbeitung und Löschung.
 
 Entwicklungsregeln stehen in [AGENTS.md](AGENTS.md), Begründungen und Grenzen der
 Architektur in den [Architekturentscheidungen](docs/architecture-decisions.md).
@@ -12,6 +13,8 @@ Architektur in den [Architekturentscheidungen](docs/architecture-decisions.md).
 ## Voraussetzungen und lokaler Start
 
 - Vorhandenes JDK 21 (`java -version`, gegebenenfalls `JAVA_HOME`). Kein automatischer JDK-Download.
+- Node gemäß `frontend/.node-version` und pnpm gemäß `frontend/package.json` müssen
+  bereits installiert und im PATH verfügbar sein. Gradle installiert keine Werkzeuge.
 - OrbStack muss laufen. Gradle Wrapper ist enthalten; keine zusätzliche Installation nötig.
 - Beim ersten Lauf Internetzugang für Abhängigkeiten und Container-Images.
 
@@ -77,7 +80,7 @@ von 30 Minuten Inaktivität; eine zentrale sofortige Session-Sperrung ist nicht 
 
 | Endpoint | Verhalten |
 | --- | --- |
-| `GET /login` | Startet Browserlogin bei Keycloak; danach Weiterleitung auf `/api/me` |
+| `GET /login` | Startet Browserlogin bei Keycloak; danach Weiterleitung auf die Übersicht `/` |
 | `GET /api/me` | `{"id":"<sub>","username":"<preferred_username>"}` |
 | `GET /api/csrf` | `{"token":"…","headerName":"X-CSRF-TOKEN"}` für die aktuelle Session |
 | `POST /logout` | Mit CSRF-Token: lokale Session beenden, Weiterleitung zum Keycloak-Logout |
@@ -86,7 +89,8 @@ von 30 Minuten Inaktivität; eine zentrale sofortige Session-Sperrung ist nicht 
 
 Nicht angemeldete API-Aufrufe liefern `401` mit `application/problem+json`.
 Angemeldete Schreibzugriffe ohne gültiges CSRF-Token liefern `403` im gleichen
-Format. Fehlgeschlagene OIDC-Callbacks liefern ebenfalls `401` mit Problem Details;
+Format. Fehlgeschlagene OIDC-Callbacks liefern ebenfalls `401`: für Browser mit HTML-Accept
+eine Fehlerseite mit Login-Link, sonst Problem Details;
 über `/login` lässt sich die Anmeldung erneut starten. Die API verwendet Session-Cookies, keine Basic-Authentifizierung oder
 Bearer-Tokens. Ein erfolgreicher Keycloak-Login allein authentifiziert noch keine
 beliebigen curl-Aufrufe: Diese müssten die Tracker-Session mitsenden.
@@ -144,12 +148,83 @@ Ein anschließender Login benötigt ein neues CSRF-Token. Sessions werden im
 Anwendungsspeicher gehalten; nach einem Tracker-Neustart erneut `/login` öffnen.
 Eine noch aktive Keycloak-Session kann dabei einen erneuten Passwortdialog ersparen.
 
+## Web-Oberfläche und Frontend-Entwicklung
+
+Nach dem Start http://localhost:8080 öffnen. Die Anmeldung erfolgt bei Keycloak;
+danach erscheint die Monatsübersicht. Monatswechsel und ein freier Zeitraum steuern
+Liste und Summen. Die Differenz ist Einnahmen minus Ausgaben im gewählten Zeitraum,
+kein Kontostand. Die Oberfläche sortiert nach Datum und ID absteigend. Desktop zeigt
+Spalten, kleine Displays zeigen Buchungskarten. Kategorien, Konten, Diagramme und
+Währungsumrechnung sind nicht enthalten.
+
+`./gradlew bootRun`, `build` und `bootJar` bauen das Frontend über vorhandenes pnpm
+und übernehmen `frontend/dist` in das JAR. Auch `test` benötigt den Frontend-Build
+für die Routing-Tests. Projektabhängigkeiten installiert Gradle mit dem Lockfile;
+Node und pnpm werden nicht automatisch installiert. Liegt pnpm außerhalb des PATH,
+kann `-PpnpmExecutable=/absoluter/pfad/zu/pnpm` verwendet werden.
+
+Für Entwicklung mit Hot Reload zunächst im ersten Terminal:
+
+```sh
+cd frontend
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+Im zweiten Terminal im Projektverzeichnis `.env` wie oben laden, Compose starten
+und anschließend:
+
+```sh
+./gradlew bootRun -PfrontendDev=true
+```
+
+Den Browser weiterhin auf **http://localhost:8080** öffnen. Das Profil `frontend-dev`
+bezieht HTML und Module vom lokalen Vite-Server auf Port 5173; Spring liefert die
+Module unter `/__vite/` aus. Nur der Hot-Reload-WebSocket verbindet sich direkt mit
+5173. Session, Fach-API, Login und Logout bleiben auf 8080. Das Profil ist nur für
+lokale Entwicklung vorgesehen; es gibt keinen Vite-Proxy im Produktionsprofil.
+Ein zusätzlich gesetztes `SPRING_PROFILES_ACTIVE` ist für diesen Ablauf nicht nötig.
+
+Das Frontend lädt `/api/me`, beschafft CSRF-Token vor Schreibzugriffen und verwendet
+beim Logout ein Formular. Bei abgelaufener Session wird der Nutzercache geleert und
+eine erneute Anmeldung angeboten. Nicht gespeicherte Formulare gehen dabei verloren;
+Schreibzugriffe werden nach Fehlern nicht automatisch wiederholt. Feld- und
+Netzwerkfehler beim Speichern erhalten die Eingaben in der laufenden Sitzung.
+
+## Buchungs-API
+
+`/api/bookings` verwaltet beide Arten auf derselben Datengrundlage. CRUD-Statuscodes,
+Datumsfilter, Besitzertrennung und Problem Details entsprechen der Ausgaben-API.
+Listen sind nach ID aufsteigend sortiert. Ein Beispiel für POST oder PUT:
+
+```json
+{"type":"INCOME","description":"Honorar","amount":"123.456789","date":"2026-11-03"}
+```
+
+Antworten enthalten zusätzlich die Datenbank-`id`. `type` ist `INCOME` oder
+`EXPENSE`; der Betrag ist für beide Arten positiv. **Die neue API verlangt und
+liefert Dezimalstrings**, mit Punkt als Dezimaltrenner, ohne Vorzeichen oder
+Exponentialschreibweise. JSON-Zahlen werden hier abgelehnt. Die Oberfläche nimmt
+Komma oder Punkt entgegen, rechnet mit Dezimalarithmetik und zeigt mindestens zwei,
+bei Bedarf alle weiteren Nachkommastellen. Sie rundet gespeicherte Beträge nicht.
+
+Die Übersicht lädt sämtliche Buchungen des Zeitraums und berechnet ihre Summen im
+Client. Es gibt zunächst keine Pagination und keinen Summen-Endpunkt. EUR ist eine
+gemeinsame Darstellungsannahme, kein Währungsfeld pro Datensatz.
+
+Die bisherige `/api/expenses`-API bleibt erhalten: Beträge sind dort JSON-Zahlen,
+alle Zugriffe betreffen ausschließlich Ausgaben. Einnahmen-IDs liefern dort `404`.
+Über `/api/bookings` lässt sich die Art einer eigenen Buchung ändern; danach ist sie
+entsprechend über die alte API sichtbar oder unsichtbar. Bereits vorhandene Zeilen
+werden durch ein neues Liquibase-Changeset als `EXPENSE` übernommen. Besitzerlose
+Altdaten bleiben unsichtbar. Die Tabellennamensgebung `expenses` bleibt erhalten.
+
 ## Ausgabenvertrag und Datenhaltung
 
 Ausgaben enthalten `id`, `description`, `amount`, `date`. Die Datenbank vergibt IDs;
 Lücken sind zulässig. Die Beschreibung muss nichtleer, der Betrag positiv und das
 Datum im Format `YYYY-MM-DD` vorhanden sein. Beträge bleiben `BigDecimal`/`NUMERIC`
-ohne feste Skala und ohne automatische Rundung. Zunächst eine gemeinsame Währung.
+ohne feste Skala und ohne automatische Rundung. Gemeinsame Darstellungswährung ist EUR.
 Listen sind nach ID aufsteigend sortiert; ohne Treffer `[]`.
 
 `from` und `to` filtern das Ausgabedatum inklusive Grenzen. Ungültige Datumswerte
@@ -202,11 +277,33 @@ Sortierung, konkurrierende Löschungen, Besitzertrennung, CSRF, Logout und Migra
 bestehender Daten. Tests teilen eine Datenbank und laufen sequenziell.
 Bericht: `build/reports/tests/test/index.html`. Docker-Probleme führen zum Testfehler.
 
+Frontend-Prüfungen im Verzeichnis `frontend`:
+
+```sh
+pnpm test
+pnpm build
+# Chromium einmalig ausdrücklich als Testbrowser bereitstellen:
+pnpm exec playwright install chromium
+pnpm test:e2e
+```
+
+`./gradlew build` führt zusätzlich die Vitest-Komponententests aus. Playwright baut
+die Oberfläche und startet selbst einen Preview-Server auf Port 4173. Die Tests
+prüfen Erstellen, Bearbeiten, Löschen und Darstellung auf Desktop und Smartphone
+mit gemockter API und Session. Diese Tests belegen keinen echten OIDC-Login.
+`FrontendRoutingTest` prüft die Spring-Auslieferung und die Trennung von API-/UI-Routen.
+`BookingApiTest` ergänzt CRUD, Einnahmen, Dezimalstrings, Besitzertrennung,
+CSRF und konkurrierende Löschungen. Browserberichte stehen unter
+`frontend/test-results` und sind keine dauerhafte Projektdokumentation.
+
 ## Manueller Abnahme- und Persistenztest
 
 1. Compose und Tracker wie oben starten. Zwei Benutzer A und B anlegen.
-2. Mit A einloggen und das temporäre Passwort ersetzen. Eine Ausgabe über die
-   Browserkonsole erstellen; ID und Antwort notieren. Kontoverwaltung öffnen und
+2. Auf http://localhost:8080 mit A einloggen und das temporäre Passwort ersetzen.
+   In der Oberfläche eine Einnahme und eine Ausgabe erstellen, Zeitraum und Summen
+   prüfen, eine Buchung bearbeiten und eine weitere nach Bestätigung löschen.
+   Bei schmalem Browserfenster Tastaturbedienung und Kartenansicht prüfen.
+   Eine Ausgabe über die Browserkonsole erstellen; ID und Antwort notieren. Kontoverwaltung öffnen und
    Passwort erneut ändern, danach den Login mit dem neuen Passwort prüfen.
 3. Mit einem getrennten Browserprofil als B anmelden. Eigene Ausgabe erstellen.
    Listen und alle Datumsfilter dürfen nur Bs Ausgabe zeigen. Direkte GET-, PUT-

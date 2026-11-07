@@ -28,6 +28,7 @@ class ExpenseMigrationTest {
             assertThat(legacy.get("description")).isEqualTo("Legacy");
             assertThat(legacy.get("amount")).isEqualTo(new java.math.BigDecimal("12.34567"));
             assertThat(legacy.get("owner_subject")).isNull();
+            assertThat(legacy.get("booking_type")).isEqualTo("EXPENSE");
             assertThat(jdbc.queryForObject("""
                     SELECT count(*) FROM pg_indexes WHERE schemaname = 'migration_test'
                     AND indexname = 'expenses_owner_subject_id_idx'
