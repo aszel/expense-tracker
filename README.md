@@ -6,6 +6,9 @@ OpenID Connect; der Tracker verwendet eine serverseitige Session. Jeder Benutzer
 sieht und bearbeitet ausschließlich seine eigenen Ausgaben. Eine Ausgabenoberfläche
 ist nicht enthalten.
 
+Entwicklungsregeln stehen in [AGENTS.md](AGENTS.md), Begründungen und Grenzen der
+Architektur in den [Architekturentscheidungen](docs/architecture-decisions.md).
+
 ## Voraussetzungen und lokaler Start
 
 - Vorhandenes JDK 21 (`java -version`, gegebenenfalls `JAVA_HOME`). Kein automatischer JDK-Download.
