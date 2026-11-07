@@ -10,13 +10,17 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 interface ExpenseJpaRepository extends JpaRepository<ExpenseEntity, Long> {
-    List<ExpenseEntity> findByDateGreaterThanEqualOrderByIdAsc(LocalDate from);
+    List<ExpenseEntity> findByOwnerSubjectAndDateGreaterThanEqualOrderByIdAsc(String ownerSubject, LocalDate from);
 
-    List<ExpenseEntity> findByDateLessThanEqualOrderByIdAsc(LocalDate to);
+    List<ExpenseEntity> findByOwnerSubjectAndDateLessThanEqualOrderByIdAsc(String ownerSubject, LocalDate to);
 
-    List<ExpenseEntity> findByDateBetweenOrderByIdAsc(LocalDate from, LocalDate to);
+    List<ExpenseEntity> findByOwnerSubjectAndDateBetweenOrderByIdAsc(String ownerSubject, LocalDate from, LocalDate to);
+
+    List<ExpenseEntity> findByOwnerSubjectOrderByIdAsc(String ownerSubject);
+
+    Optional<ExpenseEntity> findByIdAndOwnerSubject(long id, String ownerSubject);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("select expense from ExpenseEntity expense where expense.id = :id")
-    Optional<ExpenseEntity> findByIdForUpdate(@Param("id") long id);
+    @Query("select expense from ExpenseEntity expense where expense.id = :id and expense.ownerSubject = :ownerSubject")
+    Optional<ExpenseEntity> findByIdForUpdate(@Param("id") long id, @Param("ownerSubject") String ownerSubject);
 }

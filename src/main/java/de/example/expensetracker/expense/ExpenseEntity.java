@@ -11,6 +11,8 @@ class ExpenseEntity {
     Long id;
     @Column(nullable = false, columnDefinition = "text")
     String description;
+    @Column(name = "owner_subject", columnDefinition = "text")
+    String ownerSubject;
     @Column(nullable = false, columnDefinition = "numeric")
     BigDecimal amount;
     @Column(nullable = false)

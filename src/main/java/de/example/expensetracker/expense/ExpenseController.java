@@ -4,6 +4,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 import jakarta.validation.Valid;
+import de.example.expensetracker.security.CurrentUser;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -24,14 +25,16 @@ import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 public class ExpenseController {
 
     private final ExpenseRepository repository;
+    private final CurrentUser currentUser;
 
-    public ExpenseController(ExpenseRepository repository) {
+    public ExpenseController(ExpenseRepository repository, CurrentUser currentUser) {
         this.repository = repository;
+        this.currentUser = currentUser;
     }
 
     @PostMapping
     public ResponseEntity<Expense> create(@Valid @RequestBody ExpenseRequest request) {
-        Expense expense = repository.create(request);
+        Expense expense = repository.create(currentUser.subject(), request);
         var location = ServletUriComponentsBuilder.fromCurrentRequest()
                 .path("/{id}").buildAndExpand(expense.id()).toUri();
         return ResponseEntity.created(location).body(expense);
@@ -44,22 +47,22 @@ public class ExpenseController {
         if (from != null && to != null && from.isAfter(to)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "from must be on or before to");
         }
-        return repository.findAll(from, to);
+        return repository.findAll(currentUser.subject(), from, to);
     }
 
     @GetMapping("/{id}")
     public Expense findById(@PathVariable long id) {
-        return repository.findById(id).orElseThrow(() -> notFound(id));
+        return repository.findById(currentUser.subject(), id).orElseThrow(() -> notFound(id));
     }
 
     @PutMapping("/{id}")
     public Expense update(@PathVariable long id, @Valid @RequestBody ExpenseRequest request) {
-        return repository.update(id, request).orElseThrow(() -> notFound(id));
+        return repository.update(currentUser.subject(), id, request).orElseThrow(() -> notFound(id));
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable long id) {
-        if (!repository.delete(id)) {
+        if (!repository.delete(currentUser.subject(), id)) {
             throw notFound(id);
         }
         return ResponseEntity.noContent().build();

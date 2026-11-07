@@ -3,7 +3,7 @@ package de.example.expensetracker.expense;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
-import org.springframework.data.domain.Sort;
+import java.util.Objects;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,41 +17,46 @@ public class ExpenseRepository {
     }
 
     @Transactional
-    public Expense create(ExpenseRequest request) {
+    public Expense create(String ownerSubject, ExpenseRequest request) {
         ExpenseEntity entity = new ExpenseEntity();
+        entity.ownerSubject = Objects.requireNonNull(ownerSubject);
         entity.update(request);
         return jpa.save(entity).response();
     }
 
-    public List<Expense> findAll(LocalDate from, LocalDate to) {
+    public List<Expense> findAll(String ownerSubject, LocalDate from, LocalDate to) {
+        Objects.requireNonNull(ownerSubject);
         List<ExpenseEntity> entities;
         if (from != null && to != null) {
-            entities = jpa.findByDateBetweenOrderByIdAsc(from, to);
+            entities = jpa.findByOwnerSubjectAndDateBetweenOrderByIdAsc(ownerSubject, from, to);
         } else if (from != null) {
-            entities = jpa.findByDateGreaterThanEqualOrderByIdAsc(from);
+            entities = jpa.findByOwnerSubjectAndDateGreaterThanEqualOrderByIdAsc(ownerSubject, from);
         } else if (to != null) {
-            entities = jpa.findByDateLessThanEqualOrderByIdAsc(to);
+            entities = jpa.findByOwnerSubjectAndDateLessThanEqualOrderByIdAsc(ownerSubject, to);
         } else {
-            entities = jpa.findAll(Sort.by("id"));
+            entities = jpa.findByOwnerSubjectOrderByIdAsc(ownerSubject);
         }
         return entities.stream().map(ExpenseEntity::response).toList();
     }
 
-    public Optional<Expense> findById(long id) {
-        return jpa.findById(id).map(ExpenseEntity::response);
+    public Optional<Expense> findById(String ownerSubject, long id) {
+        Objects.requireNonNull(ownerSubject);
+        return jpa.findByIdAndOwnerSubject(id, ownerSubject).map(ExpenseEntity::response);
     }
 
     @Transactional
-    public Optional<Expense> update(long id, ExpenseRequest request) {
-        return jpa.findByIdForUpdate(id).map(entity -> {
+    public Optional<Expense> update(String ownerSubject, long id, ExpenseRequest request) {
+        Objects.requireNonNull(ownerSubject);
+        return jpa.findByIdForUpdate(id, ownerSubject).map(entity -> {
             entity.update(request);
             return entity.response();
         });
     }
 
     @Transactional
-    public boolean delete(long id) {
-        return jpa.findByIdForUpdate(id).map(entity -> {
+    public boolean delete(String ownerSubject, long id) {
+        Objects.requireNonNull(ownerSubject);
+        return jpa.findByIdForUpdate(id, ownerSubject).map(entity -> {
             jpa.delete(entity);
             return true;
         }).orElse(false);

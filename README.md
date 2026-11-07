@@ -1,172 +1,237 @@
 # Expense Tracker
 
-REST-API mit Java 21, Spring Boot 3.5.16 und Gradle 8.14.3
-(Kotlin DSL). Basispaket: `de.example.expensetracker`.
+REST-API mit Java 21, Spring Boot 3.5.16, Gradle 8.14.3 und PostgreSQL 17.11.
+Keycloak 26.8.2 übernimmt die Benutzerverwaltung. Anmeldung erfolgt im Browser über
+OpenID Connect; der Tracker verwendet eine serverseitige Session. Jeder Benutzer
+sieht und bearbeitet ausschließlich seine eigenen Ausgaben. Eine Ausgabenoberfläche
+ist nicht enthalten.
 
-## Voraussetzungen
+## Voraussetzungen und lokaler Start
 
-- Vorhandenes JDK 21; `java -version` prüfen und gegebenenfalls `JAVA_HOME` setzen.
-- Internetzugang beim ersten Build zum Laden von Gradle und Abhängigkeiten.
-
-Der Gradle Wrapper ist enthalten; eine globale Gradle-Installation ist nicht nötig.
-Zusätzliche JDKs werden nicht automatisch heruntergeladen.
-
-## Tests
-
-```sh
-./gradlew test
-```
-
-Die Tests laden den Spring-Anwendungskontext und prüfen mit MockMvc Health,
-den CRUD-Ablauf, serverseitige IDs, Dezimalpräzision, Validierung und unbekannte IDs
-sowie Problem Details für ungültige Eingaben.
-Testbericht: `build/reports/tests/test/index.html`.
-
-Der Integrationstest für konkurrierende Löschungen lässt sich gezielt ausführen:
+- Vorhandenes JDK 21 (`java -version`, gegebenenfalls `JAVA_HOME`). Kein automatischer JDK-Download.
+- OrbStack muss laufen. Gradle Wrapper ist enthalten; keine zusätzliche Installation nötig.
+- Beim ersten Lauf Internetzugang für Abhängigkeiten und Container-Images.
 
 ```sh
-./gradlew test --tests de.example.expensetracker.ExpenseApiTest.concurrentDeletionReturnsNotFoundForWaitingWrite
-```
+cp .env.example .env
+# In .env drei eigene, unterschiedliche lokale Passwörter/Secrets setzen.
+# .env ist von Git ausgeschlossen. Beispielwerte vor dem Start ersetzen.
+set -a
+source .env
+set +a
 
-Er prüft PUT und DELETE gegen eine noch nicht bestätigte Löschung in einer zweiten
-Transaktion. Erst wenn PostgreSQL bestätigt, dass der Request auf diese Transaktion
-wartet, wird die Löschung bestätigt. Beide Requests müssen anschließend HTTP 404
-mit `application/problem+json` liefern; die Ausgabe bleibt gelöscht.
-
-## Anwendung starten
-
-```sh
-./gradlew bootRun
-```
-
-Die Anwendung läuft standardmäßig auf Port 8080. Beenden mit `Ctrl+C`.
-
-```sh
-curl -i http://localhost:8080/api/health
-```
-
-Erwartet: HTTP `200 OK`, Inhaltstyp `application/json` und:
-
-```json
-{"status":"UP"}
-```
-
-Der Endpunkt bestätigt, dass die Anwendung Anfragen verarbeitet; Datenbankprüfungen
-sind noch nicht enthalten.
-
-## Ausführbare JAR erstellen
-
-```sh
-./gradlew bootJar
-java -jar build/libs/expense-tracker-0.0.1-SNAPSHOT.jar
-```
-
-Unter Windows entsprechend `gradlew.bat` verwenden.
-
-## Ausgaben verwalten
-
-Eine Ausgabe hat `id`, `description`, `amount` und `date`. Die ID wird vom Server
-vergeben. Beschreibung darf weder fehlen noch leer sein, `amount` ist eine positive
-`BigDecimal`-Zahl und `date` ein Pflichtdatum im Format `YYYY-MM-DD`.
-Es gilt zunächst eine gemeinsame, nicht separat gespeicherte Währung.
-
-```sh
-# Erstellen: 201 Created, Location-Header verweist auf die neue Ausgabe
-curl -i -X POST http://localhost:8080/api/expenses \
-  -H 'Content-Type: application/json' \
-  -d '{"description":"Mittagessen","amount":12.34,"date":"2026-11-03"}'
-
-# Alle Ausgaben: 200 OK (anfangs [])
-curl -i http://localhost:8080/api/expenses
-
-# Einzelne Ausgabe: 200 OK oder 404
-curl -i http://localhost:8080/api/expenses/1
-
-# Vollständig aktualisieren: 200 OK oder 404; ID bleibt unverändert
-curl -i -X PUT http://localhost:8080/api/expenses/1 \
-  -H 'Content-Type: application/json' \
-  -d '{"description":"Abendessen","amount":25.75,"date":"2026-11-04"}'
-
-# Löschen: 204 No Content oder 404
-curl -i -X DELETE http://localhost:8080/api/expenses/1
-
-# Validierungsfehler: 400 Bad Request
-curl -i -X POST http://localhost:8080/api/expenses \
-  -H 'Content-Type: application/json' \
-  -d '{"description":"","amount":0,"date":null}'
-```
-
-Die Beispiel-ID `1` gegebenenfalls durch die ID aus der POST-Antwort ersetzen.
-PUT erstellt keine fehlenden Ausgaben. Die Liste ist nach ID aufsteigend sortiert.
-
-GET `/api/expenses` unterstützt die optionalen Query-Parameter `from` und `to`
-im Format `YYYY-MM-DD`. Beide Grenzen beziehen sich auf das Ausgabedatum und sind
-inklusive. Jeder Parameter kann einzeln angegeben werden; ohne Parameter werden
-weiterhin alle Ausgaben geliefert. Auch gefilterte Listen sind nach ID aufsteigend
-sortiert. Ohne Treffer lautet die Antwort `[]` mit HTTP 200. Liegt `from` nach `to`
-oder ist ein Datum ungültig, folgt HTTP 400 mit Problem Details.
-
-```sh
-# Geschlossenes Datumsintervall
-curl -i 'http://localhost:8080/api/expenses?from=2026-11-01&to=2026-11-30'
-
-# Nur Untergrenze bzw. nur Obergrenze
-curl -i 'http://localhost:8080/api/expenses?from=2026-11-03'
-curl -i 'http://localhost:8080/api/expenses?to=2026-11-03'
-```
-
-PUT und DELETE laden die Ausgabe innerhalb ihrer Schreibtransaktion mit einer
-pessimistischen Schreibsperre (`PESSIMISTIC_WRITE`). Konkurrierende Schreibzugriffe
-auf dieselbe Ausgabe warten bis zum Ende der sperrenden Transaktion. Wird die
-Ausgabe während dieser Wartezeit durch die andere Transaktion gelöscht und die
-Löschung bestätigt, antwortet der wartende Request mit HTTP 404 und Problem Details.
-Er erhält dadurch keine unbehandelte Exception wegen einer zwischen Lesen und
-Schreiben verschwundenen Zeile. Erfolgreiche PUTs liefern weiterhin 200,
-erfolgreiche DELETEs 204. Eine Versionsprüfung für veraltete Clientdaten ist damit
-nicht verbunden.
-
-Fehler liefern `application/problem+json` mit `type`, `title`, `status`, `detail`
-und `instance`. Bei Feldvalidierungsfehlern enthält `errors` zusätzlich Feldnamen
-und Meldungen. Auch unlesbares JSON, ungültige Datumswerte und ungültige IDs im Pfad
-liefern HTTP 400.
-
-## PostgreSQL und Architektur
-
-OrbStack muss laufen. Lokale Datenbank starten:
-
-```sh
+docker compose config --quiet
 docker compose up -d --wait
 ./gradlew bootRun
 ```
 
-PostgreSQL 17.11 speichert Daten im benannten Volume `postgres_data`.
-`docker compose down` behält Daten; `docker compose down -v` löscht sie.
-Lokale Zugangsdaten: Datenbank, Benutzer und Passwort jeweils `expensetracker`.
-Die Entwicklungswerte sind nicht für einen öffentlichen Betrieb gedacht.
-`DB_USERNAME`, `DB_PASSWORD` und `DB_URL` überschreiben die Anwendungskonfiguration.
-Compose unterstützt `DB_PORT` (Standard 5432); bei Änderung auch `DB_URL` anpassen.
+Falls bereits eine `.env` existiert, diese behalten und nur fehlende Variablen ergänzen.
+Compose liest `.env` automatisch. `bootRun` und `java -jar` benötigen die Variablen
+im Shell-Environment, daher auch in einem neuen Terminal zuerst `.env` laden.
+Keycloak muss vor dem Tracker bereit sein: Der Tracker liest beim Start die
+OIDC-Konfiguration des Realms und prüft die Identität gegen dessen Issuer.
 
-Der Controller verwendet weiterhin den Repository-Adapter. Dieser bildet zwischen
-API-Records und einer getrennten JPA-Entity ab und verwaltet Schreibtransaktionen.
-Spring Data JPA übernimmt Datenzugriffe. Liquibase erstellt das Schema; Hibernate
-validiert es nur. NUMERIC bewahrt Dezimalpräzision ohne feste Nachkommastellenskala.
-Es gibt keine Flyway-Abhängigkeit oder zusätzliche Service-Schicht.
+| Dienst | Adresse / Konfiguration |
+| --- | --- |
+| Expense Tracker | http://localhost:8080 |
+| Keycloak Admin-Konsole | http://localhost:8081/admin/ |
+| Keycloak Kontoverwaltung | http://localhost:8081/realms/expense-tracker/account/ |
+| Tracker-Datenbank | localhost:5432, DB/Benutzer/Passwort lokal jeweils `expensetracker` |
+| Keycloak-Datenbank | Nur im Docker-Netzwerk; eigene DB und eigenes Volume |
 
-`./gradlew test` startet PostgreSQL automatisch mit Testcontainers und führt auch
-Liquibase aus. Keine manuell gestartete Datenbank ist nötig. OrbStack und beim ersten
-Lauf Netzwerkzugriff für Images und Abhängigkeiten sind erforderlich. Ohne Docker
-schlagen die Tests fehl. Die Testdatenbank verwendet nicht das Compose-Volume.
+`KEYCLOAK_ADMIN_USERNAME` (Standard `admin`) und `KEYCLOAK_ADMIN_PASSWORD` erstellen
+beim ersten Start den Bootstrap-Administrator. `KEYCLOAK_DB_PASSWORD` ist das
+Passwort der separaten Keycloak-Datenbank. `KEYCLOAK_CLIENT_SECRET` muss in Keycloak
+und der Anwendung übereinstimmen. Keine produktiven Zugangsdaten verwenden.
 
-## Manueller Persistenztest über Anwendungsneustart
+Der Realm `expense-tracker` und der vertrauliche Client `expense-tracker-web`
+werden beim ersten Start aus `keycloak/expense-tracker-realm.json` importiert.
+Bereits vorhandene Realms werden beim Neustart **nicht überschrieben**. Änderungen
+an der Importdatei oder am Client-Secret in `.env` aktualisieren einen bestehenden
+Realm nicht: Änderungen auch in der Admin-Konsole vornehmen, insbesondere unter
+Clients → expense-tracker-web → Credentials. Bestehende Volumes nicht löschen.
+Auch Datenbankpasswörter ändern sich durch Änderung der Umgebungsvariable nicht
+nachträglich in bereits initialisierten PostgreSQL-Volumes.
 
-1. `docker compose up -d --wait` und `./gradlew bootRun` ausführen.
-2. In einem zweiten Terminal die POST-Anfrage oben ausführen; ID und Antwort notieren.
-3. Anwendung mit Ctrl+C beenden. PostgreSQL und Volume unverändert lassen.
-4. Anwendung erneut mit `./gradlew bootRun` starten.
-5. `curl -i http://localhost:8080/api/expenses/ID` mit der notierten ID ausführen:
-   Erwartet sind HTTP 200 und identische ID, Beschreibung, Betrag und Datum.
-6. Eine weitere Ausgabe erstellen: Sie muss eine neue ID erhalten. Optional Compose
-   mit `docker compose down` und `docker compose up -d --wait` neu erstellen und GET
-   wiederholen; das Volume bewahrt die Daten. Nicht `down -v` verwenden.
+## Nutzer anlegen und Passwörter verwalten
 
-Authentifizierung und Pagination sind weiterhin nicht enthalten.
+1. In der Admin-Konsole mit den Zugangsdaten aus `.env` anmelden.
+2. Zum Realm **expense-tracker** wechseln; App-Benutzer nicht im Realm `master` anlegen.
+3. Unter Users → Add user einen Benutzer mit Benutzername und Profil anlegen.
+4. Unter Credentials ein Passwort setzen und **Temporary** einschalten.
+5. Der Benutzer öffnet http://localhost:8080/login und vergibt beim ersten Login sein eigenes Passwort.
+6. Spätere Passwortänderungen sind über die Keycloak-Kontoverwaltung möglich.
+
+Selbstregistrierung, Direct Access Grants und „Passwort vergessen“ sind im
+importierten Realm deaktiviert. Für einen späteren E-Mail-Passwortreset müssten
+SMTP und die entsprechende Realm-Option eingerichtet werden. Alle Benutzer dieses
+Realms dürfen die App nutzen; eine zusätzliche App-Rollenvergabe ist nicht nötig.
+Deaktivieren/Löschen eines Kontos in Keycloak beendet eine bereits bestehende
+Tracker-Session nicht unmittelbar. Der Tracker verwendet einen Session-Timeout
+von 30 Minuten Inaktivität; eine zentrale sofortige Session-Sperrung ist nicht enthalten.
+
+## Login, Session und Logout
+
+| Endpoint | Verhalten |
+| --- | --- |
+| `GET /login` | Startet Browserlogin bei Keycloak; danach Weiterleitung auf `/api/me` |
+| `GET /api/me` | `{"id":"<sub>","username":"<preferred_username>"}` |
+| `GET /api/csrf` | `{"token":"…","headerName":"X-CSRF-TOKEN"}` für die aktuelle Session |
+| `POST /logout` | Mit CSRF-Token: lokale Session beenden, Weiterleitung zum Keycloak-Logout |
+| `GET /logged-out` | Öffentliche Abmeldebestätigung mit Link zur erneuten Anmeldung |
+| `GET /api/health` | Öffentlich: `{"status":"UP"}`; keine explizite Datenbankprüfung |
+
+Nicht angemeldete API-Aufrufe liefern `401` mit `application/problem+json`.
+Angemeldete Schreibzugriffe ohne gültiges CSRF-Token liefern `403` im gleichen
+Format. Fehlgeschlagene OIDC-Callbacks liefern ebenfalls `401` mit Problem Details;
+über `/login` lässt sich die Anmeldung erneut starten. Die API verwendet Session-Cookies, keine Basic-Authentifizierung oder
+Bearer-Tokens. Ein erfolgreicher Keycloak-Login allein authentifiziert noch keine
+beliebigen curl-Aufrufe: Diese müssten die Tracker-Session mitsenden.
+
+Nach dem Login können Aufrufe direkt in der Browserkonsole auf **localhost:8080**
+ausgeführt werden. Cookies werden bei diesen Aufrufen automatisch mitgesendet:
+
+```javascript
+const csrf = await fetch('/api/csrf').then(r => r.json());
+const headers = {'Content-Type': 'application/json', [csrf.headerName]: csrf.token};
+
+// Erstellen: 201 mit Location-Header
+const created = await fetch('/api/expenses', {
+  method: 'POST', headers,
+  body: JSON.stringify({description: 'Mittagessen', amount: 12.34, date: '2026-11-03'})
+}).then(r => r.json());
+
+// Liste und Eintrag: 200
+await fetch('/api/expenses').then(r => r.json());
+await fetch(`/api/expenses/${created.id}`).then(r => r.json());
+
+// Datumsfilter (inklusive Grenzen, auch einzeln verwendbar)
+await fetch('/api/expenses?from=2026-11-01&to=2026-11-30').then(r => r.json());
+
+// Vollständig aktualisieren: 200; PUT erstellt keine fehlenden Einträge
+await fetch(`/api/expenses/${created.id}`, {
+  method: 'PUT', headers,
+  body: JSON.stringify({description: 'Abendessen', amount: 25.75, date: '2026-11-04'})
+}).then(r => r.json());
+
+// Löschen: 204
+await fetch(`/api/expenses/${created.id}`, {method: 'DELETE', headers});
+```
+
+Zum Logout muss der Browser der Weiterleitung zu Keycloak als Seitennavigation
+folgen. Ein `fetch('/logout')` ist wegen der Weiterleitung auf den anderen Port
+ungeeignet. Stattdessen ein Formular absenden:
+
+```javascript
+const logoutCsrf = await fetch('/api/csrf').then(r => r.json());
+const form = document.createElement('form');
+form.method = 'POST';
+form.action = '/logout';
+const input = document.createElement('input');
+input.type = 'hidden';
+input.name = '_csrf';
+input.value = logoutCsrf.token;
+form.append(input);
+document.body.append(form);
+form.submit();
+```
+
+Nach Logout und Rückkehr auf `/logged-out` führt `/login` erneut zur Anmeldung.
+Ein anschließender Login benötigt ein neues CSRF-Token. Sessions werden im
+Anwendungsspeicher gehalten; nach einem Tracker-Neustart erneut `/login` öffnen.
+Eine noch aktive Keycloak-Session kann dabei einen erneuten Passwortdialog ersparen.
+
+## Ausgabenvertrag und Datenhaltung
+
+Ausgaben enthalten `id`, `description`, `amount`, `date`. Die Datenbank vergibt IDs;
+Lücken sind zulässig. Die Beschreibung muss nichtleer, der Betrag positiv und das
+Datum im Format `YYYY-MM-DD` vorhanden sein. Beträge bleiben `BigDecimal`/`NUMERIC`
+ohne feste Skala und ohne automatische Rundung. Zunächst eine gemeinsame Währung.
+Listen sind nach ID aufsteigend sortiert; ohne Treffer `[]`.
+
+`from` und `to` filtern das Ausgabedatum inklusive Grenzen. Ungültige Datumswerte
+oder `from > to` liefern `400`. Unbekannte und fremde Einzel-IDs liefern für GET,
+PUT und DELETE gleichermaßen `404`. Erfolgreiche Aufrufe behalten den CRUD-Vertrag:
+POST `201` mit Location, GET/PUT `200`, DELETE `204`.
+
+Fehler liefern Problem Details mit `type`, `title`, `status`, `detail`, `instance`.
+Feldvalidierungsfehler enthalten zusätzlich `errors` mit Feld und Meldung. Ungültige
+Pfad-IDs und unlesbares JSON liefern `400`.
+
+Der Besitzer wird ausschließlich aus dem OIDC-Claim `sub` der Session bestimmt.
+`owner_subject` ist kein Teil der API-Records; zusätzliche Besitzerangaben im JSON
+ändern die Zuordnung nicht. Alle fachlichen Datenbankabfragen filtern nach diesem
+Besitzer, einschließlich der Schreibsperren für PUT/DELETE. Benutzername und E-Mail
+können sich ändern, ohne die Zuordnung zu beeinflussen. Ein neu angelegter Benutzer
+mit gleichem Namen erhält eine neue ID und keinen Zugriff auf die alten Ausgaben.
+
+Bereits vorhandene Ausgaben bleiben nach Migration mit `owner_subject = NULL`
+unverändert gespeichert und sind für alle Nutzer unsichtbar. Eine spätere Zuordnung
+ist eine separate, bewusste Datenmigration. Keine automatische Übernahme beim Login.
+Bei Wechsel des konfigurierten Realms müssen Besitzer-IDs ebenfalls ausdrücklich
+migriert werden; die Anwendung ist für genau einen Realm vorgesehen.
+
+Architektur: Controller → Repository-Adapter → Spring Data JPA → PostgreSQL.
+Keine zusätzliche Service-Schicht. Liquibase ist allein für Schemaänderungen
+zuständig; Hibernate validiert das Schema, `open-in-view=false` bleibt erhalten.
+PUT/DELETE verwenden eine pessimistische Schreibsperre; nach einer konkurrierenden
+bestätigten Löschung erhält ein wartender Schreibzugriff `404`. Eine Versionsprüfung
+für veraltete Clientdaten ist damit nicht verbunden.
+
+## Tests und Build
+
+```sh
+./gradlew test
+./gradlew test --tests de.example.expensetracker.SecurityApiTest
+./gradlew test --tests de.example.expensetracker.ExpenseApiTest
+./gradlew build
+./gradlew bootJar
+# .env vorher ins Environment laden, Keycloak und PostgreSQL starten
+java -jar build/libs/expense-tracker-0.0.1-SNAPSHOT.jar
+```
+
+JUnit Jupiter, MockMvc und Testcontainers starten PostgreSQL 17.11 automatisch.
+Keine manuelle Testdatenbank, kein H2. Liquibase läuft auch in Tests. Die Tests
+verwenden eine lokale Test-Clientregistrierung und gemockte OIDC-Identitäten;
+Keycloak muss für diese Tests nicht laufen und Client-Secrets sind nicht nötig.
+Sie prüfen CRUD, Validierung, Problem Details, Dezimalpräzision, Datumsfilter,
+Sortierung, konkurrierende Löschungen, Besitzertrennung, CSRF, Logout und Migration
+bestehender Daten. Tests teilen eine Datenbank und laufen sequenziell.
+Bericht: `build/reports/tests/test/index.html`. Docker-Probleme führen zum Testfehler.
+
+## Manueller Abnahme- und Persistenztest
+
+1. Compose und Tracker wie oben starten. Zwei Benutzer A und B anlegen.
+2. Mit A einloggen und das temporäre Passwort ersetzen. Eine Ausgabe über die
+   Browserkonsole erstellen; ID und Antwort notieren. Kontoverwaltung öffnen und
+   Passwort erneut ändern, danach den Login mit dem neuen Passwort prüfen.
+3. Mit einem getrennten Browserprofil als B anmelden. Eigene Ausgabe erstellen.
+   Listen und alle Datumsfilter dürfen nur Bs Ausgabe zeigen. Direkte GET-, PUT-
+   und DELETE-Aufrufe auf As ID müssen `404` liefern. Als A entsprechend Bs ID prüfen.
+4. Als angemeldeter Nutzer einen Schreibaufruf ohne CSRF-Header senden: `403`.
+   Ohne Session `/api/expenses` aufrufen: `401`; `/api/health` bleibt `200`.
+5. Tracker mit Ctrl+C stoppen und erneut starten. Als A anmelden, notierte Ausgabe
+   abrufen und Inhalt vergleichen. Weitere Ausgabe erstellen: neue ID.
+6. `docker compose restart keycloak-db keycloak` und danach
+   `docker compose up -d --wait keycloak` ausführen. Benutzer und deren geänderte
+   Passwörter müssen weiter funktionieren; Ausgaben bleiben erhalten.
+7. Mit dem Logout-Formular abmelden. Erwartet: `/logged-out`, API anschließend `401`,
+   erneutes `/login` zeigt wieder die Keycloak-Anmeldung.
+
+`docker compose down` behält beide benannten Volumes `postgres_data` und
+`keycloak_data`. **Kein `docker compose down -v` ausführen**, wenn die Daten erhalten
+bleiben sollen. Testcontainers verwendet diese Volumes nicht.
+
+## Weitere Konfiguration
+
+- Tracker-Datenbank: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`.
+- Compose-Hostport für Tracker-PostgreSQL: `DB_PORT` (Standard 5432); bei Änderung
+  auch `DB_URL` anpassen. Keycloak-PostgreSQL veröffentlicht keinen Hostport.
+- OIDC-Issuer: `KEYCLOAK_ISSUER_URI` (Standard `http://localhost:8081/realms/expense-tracker`).
+- Callback: `http://localhost:8080/login/oauth2/code/keycloak`;
+  Logout-Rückkehr: `http://localhost:8080/logged-out`. Bei Adressänderungen auch den
+  Client in Keycloak anpassen. Für Login konsistent `localhost`, nicht `127.0.0.1`, verwenden.
+
+Dieses Setup ist für lokale Entwicklung mit HTTP und Keycloak `start-dev` gedacht.
+Öffentlicher Betrieb mit HTTPS, sicheren Cookies, Backups und Betriebsabsicherung
+ist ein eigener Schritt. Der Tracker wird weiterhin außerhalb von Docker gestartet.

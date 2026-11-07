@@ -18,6 +18,12 @@ import javax.sql.DataSource;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import org.springframework.web.context.WebApplicationContext;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+
+import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.oidcLogin;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasItem;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -34,6 +40,12 @@ class ExpenseApiTest {
     @org.junit.jupiter.api.BeforeEach
     void cleanDatabase() {
         jdbc.update("DELETE FROM expenses");
+        mvc = MockMvcBuilders.webAppContextSetup(context)
+                .apply(springSecurity())
+                .defaultRequest(get("/")
+                        .with(oidcLogin().idToken(token -> token.subject("user-a")))
+                        .with(csrf()))
+                .build();
     }
 
     private static final String VALID = """
@@ -41,6 +53,8 @@ class ExpenseApiTest {
             """;
 
     @Autowired
+    private WebApplicationContext context;
+
     private MockMvc mvc;
 
     @Autowired
