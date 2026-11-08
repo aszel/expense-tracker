@@ -76,6 +76,13 @@ Deaktivieren/Löschen eines Kontos in Keycloak beendet eine bereits bestehende
 Tracker-Session nicht unmittelbar. Der Tracker verwendet einen Session-Timeout
 von 30 Minuten Inaktivität; eine zentrale sofortige Session-Sperrung ist nicht enthalten.
 
+### Test User
+
+expense-test-alice
+Test-Alice-a62c32f99620!
+expense-test-bob
+Test-Bob-9cf5b68aa76c!
+
 ## Login, Session und Logout
 
 | Endpoint | Verhalten |
